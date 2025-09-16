@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Interface - /process</title>
+  <style>
+    :root{font-family:system-ui,-apple-system,Segoe UI,Roboto,'Helvetica Neue',Arial;}
+    body{margin:0;padding:20px;background:#f5f7fb;color:#111}
+    .card{background:white;border-radius:10px;box-shadow:0 6px 18px rgba(17,24,39,0.08);padding:18px;margin-bottom:16px}
+    h1{margin:0 0 8px;font-size:20px}
+    label{font-weight:600}
+    textarea{width:100%;height:90px;padding:8px;border-radius:6px;border:1px solid #d6d6e0;font-family:monospace}
+    input, button, select{padding:8px 10px;border-radius:6px;border:1px solid #d6d6e0}
+    .row{display:flex;gap:12px}
+    .col{flex:1}
+    pre{background:#0f1724;color:#e6f2ff;padding:12px;border-radius:8px;overflow:auto}
+    .meta{font-size:13px;color:#636b83;margin-bottom:8px}
+    .btn{cursor:pointer;background:#0ea5a4;color:white;border:none}
+    .btn:disabled{opacity:0.6}
+    .small{font-size:13px;color:#475569}
+    .example-list{display:flex;gap:8px;flex-wrap:wrap}
+    .example-item{background:#eef2ff;padding:6px 8px;border-radius:6px;cursor:pointer}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    @media(max-width:800px){.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Testador do endpoint <code>/process</code></h1>
+    <div class="meta">Envie uma fórmula e veja as etapas: Prenex, Skolemização, CNF/DNF, Forma Cláusal e identificação de cláusulas Horn.</div>
+
+    <label for="expr">Fórmula (ex.: <code>∀x (P(x) -> ∃y Q(y,x))</code>)</label>
+    <textarea id="expr" placeholder="Digite a expressão lógica aqui...">∀x (P(x) -> ∃y Q(y,x))</textarea>
+
+    <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
+      <button id="send" class="btn">Enviar</button>
+      <button id="clear" style="background:#ef4444;color:white;border:none;padding:8px 10px;border-radius:6px">Limpar</button>
+      <button id="download" style="background:#2563eb;color:white;border:none;padding:8px 10px;border-radius:6px">Baixar JSON</button>
+      <div style="margin-left:auto" class="small">Requisitará o servidor em <code>http://localhost:3000</code> rodando</div>
+    </div>
+
+    <div style="margin-top:10px" class="small">
+      Exemplos rápidos:
+      <div class="example-list" id="examples">
+        <div class="example-item">∀x (P(x) -> ∃y Q(y,x))</div>
+        <div class="example-item">¬∃x (P(x) ∧ Q(x))</div>
+        <div class="example-item">(P(a) ∨ Q(b)) -> R(c)</div>
+        <div class="example-item">∀x ∃y (P(x) ∧ Q(y))</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="resultArea"></div>
+
+  <script>
+    const send = document.getElementById('send');
+    const clear = document.getElementById('clear');
+    const expr = document.getElementById('expr');
+    const resultArea = document.getElementById('resultArea');
+    const examples = document.getElementById('examples');
+    const downloadBtn = document.getElementById('download');
+
+    let lastResult = null;
+
+    examples.addEventListener('click', (e)=>{
+      const it = e.target.closest('.example-item');
+      if(!it) return;
+      expr.value = it.textContent;
+    });
+
+    clear.addEventListener('click', ()=>{
+      expr.value = '';
+      resultArea.innerHTML = '';
+    });
+
+    send.addEventListener('click', async ()=>{
+      const value = expr.value.trim();
+      if(!value){ alert('Digite uma expressão'); return; }
+      send.disabled = true; send.textContent = 'Enviando...';
+      resultArea.innerHTML = '';
+
+      try{
+        const resp = await fetch('/process', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ expression: value })
+        });
+
+        if(!resp.ok){
+          const err = await resp.json().catch(()=>({error:resp.statusText}));
+          showError(err.error || JSON.stringify(err));
+          send.disabled = false; send.textContent = 'Enviar';
+          return;
+        }
+
+        const data = await resp.json();
+        lastResult = data;
+        renderResult(data);
+
+      }catch(err){
+        showError(err.message || String(err));
+      }
+
+      send.disabled = false; send.textContent = 'Enviar';
+    });
+
+    downloadBtn.addEventListener('click', ()=>{
+      if(!lastResult){ alert('Nenhum resultado para baixar'); return; }
+      const blob = new Blob([JSON.stringify(lastResult, null, 2)], {type:'application/json'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'process_result.json'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    });
+
+    function showError(msg){
+      resultArea.innerHTML = `<div class="card" style="border-left:4px solid #ef4444"><strong>Erro</strong><pre>${escapeHtml(msg)}</pre></div>`;
+    }
+
+    function renderResult(data){
+      const parts = [];
+
+      if(data.prenex_steps){
+        parts.push(section('Etapas para Prenex', '<ol>' + data.prenex_steps.map(s=>`<li><pre>${escapeHtml(s)}</pre></li>`).join('') + '</ol>'));
+      }
+
+      if(data.prenex) parts.push(section('Prenex', `<pre>${escapeHtml(data.prenex)}</pre>`));
+
+      if(data.skolemization){
+        parts.push(section('Skolemização', `<div class="small">Variáveis universais: ${escapeHtml(JSON.stringify(data.skolemization.universal_vars || data.universal_vars || []))}</div><pre>${escapeHtml(data.skolemization.matrix_after_skolem || data.matrix_after_skolem || '')}</pre>`));
+      }
+
+      if(data.prenex_cnf){
+        parts.push(section('Prenex - CNF', `<div class="small">Quantificadores (universais): ${escapeHtml(JSON.stringify(data.prenex_cnf.quantifiers || data.prenex_cnf.universal_vars || []))}</div><pre>${escapeHtml(data.prenex_cnf.matrix || data.prenex_cnf.matrix_after_skolem || '')}</pre>`));
+      }
+
+      if(data.prenex_dnf){
+        parts.push(section('Prenex - DNF', `<div class="small">Quantificadores (universais): ${escapeHtml(JSON.stringify(data.prenex_dnf.quantifiers || data.prenex_dnf.universal_vars || []))}</div><pre>${escapeHtml(data.prenex_dnf.matrix || data.prenex_dnf.matrix_after_skolem || '')}</pre>`));
+      }
+
+      if(data.clausal_form){
+        const list = (data.clausal_form||[]).map((c,i)=>`<li>${escapeHtml(c)} ${data.horn_clause_flags ? `<span style="color:${data.horn_clause_flags[i] ? '#065f46' : '#9a3412'}">(${data.horn_clause_flags[i] ? 'Horn' : 'não-Horn'})</span>` : ''}</li>`).join('');
+        parts.push(section('Forma Cláusal', `<ol>${list}</ol>`));
+      }
+
+      // raw JSON
+      parts.push(section('JSON bruto', `<pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre>`));
+
+      resultArea.innerHTML = parts.join('');
+      // smooth scroll to result
+      resultArea.scrollIntoView({behavior:'smooth'});
+    }
+
+    function section(title, innerHtml){
+      return `<div class="card"><h3 style="margin-top:0;margin-bottom:6px">${escapeHtml(title)}</h3>${innerHtml}</div>`;
+    }
+
+    function escapeHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+    function jsonOrPretty(obj){ try{return '<pre>'+escapeHtml(JSON.stringify(obj, null, 2))+'</pre>'; }catch(e){return escapeHtml(String(obj));} }
+
+  </script>
+</body>
+</html>
