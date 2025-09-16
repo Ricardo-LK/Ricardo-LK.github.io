@@ -14,7 +14,7 @@ app.use(express.static('public'));
 let { processExpression } = require('./logic/processa_expressao');
 
 // Rota de processamento
-app.post('/process', (req, res) => {
+app.post('ricardo-lk-github-io.vercel.app/', (req, res) => {
     try {
         let { expression } = req.body;
         if (!expression) {
