@@ -1,8 +1,10 @@
-const { clone, isAtom, astToString, renameVar, hasFreeVar, substitute, isQuant, arraysEqual } = require('./ast_utils');
+const { clone, isAtom, renameVar, hasFreeVar, substitute, isQuant, arraysEqual } = require('./ast_utils');
 
+// Remove implicações: A → B vira ¬A ∨ B
 function removeImplic(node) {
-     if (!node || isAtom(node)) return node;
+    if (!node || isAtom(node)) return node;
 
+    // Processa recursivamente todos os filhos
     if (node.left) node.left = removeImplic(node.left);
     if (node.right) node.right = removeImplic(node.right);
     if (node.body) node.body = removeImplic(node.body);
@@ -19,40 +21,45 @@ function removeImplic(node) {
     return node;
 }
 
+// Remove bicondicionais: A ↔ B vira (¬A ∨ B) ∧ (¬B ∨ A)
 function removeBicon(node) {
     if (!node || isAtom(node)) return node;
 
-    // Primeiro processa recursivamente todos os nós filhos
+    // Processa recursivamente todos os filhos
     if (node.left) node.left = removeBicon(node.left);
     if (node.right) node.right = removeBicon(node.right);
     if (node.body) node.body = removeBicon(node.body);
     if (node.value) node.value = removeBicon(node.value);
 
-    // Transforma bicondicionais
     if (node.type === 'bicondicional') {
-        let a = clone(node.left);
-        let b = clone(node.right);
+        let l = clone(node.left);
+        let r = clone(node.right);
         return {
             type: 'e',
-            left: { type: 'ou', left: { type: 'nao', value: a }, right: b },
-            right: { type: 'ou', left: { type: 'nao', value: b }, right: a }
+            left: { type: 'ou', left: { type: 'nao', value: l }, right: r },
+            right: { type: 'ou', left: { type: 'nao', value: r }, right: l }
         };
     }
     
     return node;
 }
 
+// Aplica leis de De Morgan e elimina duplas negações
 function pushNao(node) {
     if (!node) return node;
 
     if (node.type === 'nao') {
         let v = node.value;
         if (v.type === 'nao') return pushNao(v.value); // ¬¬A = A
+        
+        // Lei de De Morgan: ¬(A ∧ B) = ¬A ∨ ¬B
         if (v.type === 'e') return { 
             type: 'ou', 
             left: pushNao({ type: 'nao', value: v.left }), 
             right: pushNao({ type: 'nao', value: v.right }) 
         };
+        
+        // Lei de De Morgan: ¬(A ∨ B) = ¬A ∧ ¬B
         if (v.type === 'ou') return { 
             type: 'e', 
             left: pushNao({ type: 'nao', value: v.left }), 
@@ -60,7 +67,7 @@ function pushNao(node) {
         };
     }
 
-    // Processar recursivamente todos os nós
+    // Processa recursivamente todos os filhos
     let result = { ...node };
     if (node.left) result.left = pushNao(node.left);
     if (node.right) result.right = pushNao(node.right);
@@ -70,6 +77,7 @@ function pushNao(node) {
     return result;
 }
 
+// Remove negações de quantificadores: ¬∀x vira ∃x¬, ¬∃x vira ∀x¬
 function removeNaoQuant(node) {
     if (!node) return node;
 
@@ -83,6 +91,7 @@ function removeNaoQuant(node) {
         }
     }
 
+    // Processa recursivamente todos os filhos
     if (node.left) node.left = removeNaoQuant(node.left);
     if (node.right) node.right = removeNaoQuant(node.right);
     if (node.body) node.body = removeNaoQuant(node.body);
@@ -91,12 +100,14 @@ function removeNaoQuant(node) {
     return node;
 }
 
+// Puxa quantificadores para fora de operações lógicas
 function pullQuantAtomo(node) {
     if (!node || !node.left || !node.right) return node;
     
     node.left = pullQuantAtomo(node.left);
     node.right = pullQuantAtomo(node.right);
     
+    // Mesmo tipo e variáveis: combina quantificadores
     if (isQuant(node.left) && isQuant(node.right) &&
         node.left.type === node.right.type && 
         arraysEqual(node.left.vars, node.right.vars)) {
@@ -112,17 +123,17 @@ function pullQuantAtomo(node) {
         };
     }
     
-    // Left é quantificador right não
+    // Apenas lado esquerdo é quantificador
     if (isQuant(node.left) && !isQuant(node.right)) {
         return substituteQuantLeft(node);
     }
     
-    // Right é quantificador left não
+    // Apenas lado direito é quantificador
     if (!isQuant(node.left) && isQuant(node.right)) {
         return substituteQuantRight(node);
     }
     
-    // Left e Right são quantificadores
+    // Ambos os lados são quantificadores
     if (isQuant(node.left) && isQuant(node.right)) {
         return substituteQuants(node);
     }
@@ -130,11 +141,13 @@ function pullQuantAtomo(node) {
     return node;
 }
 
+// Move quantificador do lado esquerdo para fora
 function substituteQuantLeft(node) {
     const quantVar = node.left.vars[0];
     const quantType = node.left.type;
     
-    if (!hasFreeVar(node.right, quantVar)) { // Livre right
+    if (!hasFreeVar(node.right, quantVar)) {
+        // Variável não ocorre livre no lado direito
         return {
             type: quantType,
             vars: [quantVar],
@@ -144,8 +157,8 @@ function substituteQuantLeft(node) {
                 right: node.right
             }
         };
-
     } else {
+        // Renomeia para evitar captura de variável
         const newVar = renameVar(quantVar, node);
         const renamedBody = substitute(node.left.body, quantVar, newVar);
         
@@ -161,11 +174,13 @@ function substituteQuantLeft(node) {
     }
 }
 
+// Move quantificador do lado direito para fora
 function substituteQuantRight(node) {
     const quantVar = node.right.vars[0];
     const quantType = node.right.type;
     
-    if (!hasFreeVar(node.left, quantVar)) { // Livre left
+    if (!hasFreeVar(node.left, quantVar)) {
+        // Variável não ocorre livre no lado esquerdo
         return {
             type: quantType,
             vars: [quantVar],
@@ -175,8 +190,8 @@ function substituteQuantRight(node) {
                 right: node.right.body
             }
         };
-
     } else {
+        // Renomeia para evitar captura de variável
         const newVar = renameVar(quantVar, node);
         const renamedBody = substitute(node.right.body, quantVar, newVar);
         
@@ -192,16 +207,17 @@ function substituteQuantRight(node) {
     }
 }
 
+// Trata caso onde ambos os lados têm quantificadores
 function substituteQuants(node) {
-    // Esquerda
+    // Tenta mover quantificador esquerdo primeiro
     let tempNode = substituteQuantLeft(node);
     
-    // Direita
+    // Se não mudou, tenta lado direito
     if (tempNode === node) {
         tempNode = substituteQuantRight(node);
     }
     
-    // Esquerda/Direita
+    // Se ainda não mudou, processa ambos os lados
     if (tempNode === node) {
         return substituteQuantLeftERight(node);
     }
@@ -209,12 +225,14 @@ function substituteQuants(node) {
     return pullQuantAtomo(tempNode);
 }
 
+// Renomeia variáveis em ambos os quantificadores para evitar conflitos
 function substituteQuantLeftERight(node) {
     const leftVar = node.left.vars[0];
     const rightVar = node.right.vars[0];
     const leftType = node.left.type;
     const rightType = node.right.type;
     
+    // Gera novos nomes para evitar captura
     const newLeftVar = renameVar(leftVar, node);
     const newRightVar = renameVar(rightVar, node);
     
@@ -242,13 +260,16 @@ function substituteQuantLeftERight(node) {
     return pullQuantAtomo(tempNode);
 }
 
+// Função principal: puxa todos os quantificadores para fora
 function pullQuant(node) {
     if (!node || isAtom(node)) return node;
     
+    // Processa recursivamente todos os filhos primeiro
     if (node.left) node.left = pullQuant(node.left);
     if (node.right) node.right = pullQuant(node.right);
     if (node.body) node.body = pullQuant(node.body);
     
+    // Aplica transformação apenas em operações lógicas
     if (node.type === 'e' || node.type === 'ou') {
         return pullQuantAtomo(node);
     }
